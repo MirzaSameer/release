@@ -1,0 +1,73 @@
+# File: .github/release-drafter.yml
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+categories:
+  - title: '🚀 New Features'
+    labels:
+      - 'feature'
+      - 'enhancement'
+      - 'frontend'
+      - 'backend'
+  - title: '🐛 Bug Fixes'
+    labels:
+      - 'fix'
+      - 'bugfix'
+      - 'bug'
+  - title: '🧰 Performance Improvements'
+    labels:
+      - 'performance'
+      - 'optimization'
+  - title: '⚙️ Backend Changes'
+    labels:
+      - 'backend'
+      - 'api'
+      - 'database'
+  - title: '🖥️ Frontend Changes'
+    labels:
+      - 'frontend'
+      - 'ui'
+      - 'javascript'
+  - title: '📝 Documentation'
+    labels:
+      - 'documentation'
+      - 'docs'
+  - title: '🔄 Dependency Updates'
+    labels:
+      - 'dependencies'
+      - 'deps'
+change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
+exclude-labels:
+  - 'skip-changelog'
+include-labels:
+  - '*'
+version-resolver:
+  major:
+    labels:
+      - 'major'
+      - 'breaking'
+  minor:
+    labels:
+      - 'minor'
+      - 'feature'
+      - 'enhancement'
+  patch:
+    labels:
+      - 'patch'
+      - 'fix'
+      - 'bugfix'
+      - 'bug'
+      - 'hotfix'
+      - 'performance'
+  default: patch
+template: |
+  ## Release v$RESOLVED_VERSION
+
+  $CHANGES
+  
+  ### Database Changes
+  - Please review any database migration scripts in the `./Database` directory
+  
+  ### Frontend Assets
+  - Remember to clear browser cache after deployment
+  
+  **Full Changelog**: https://github.com/owner/repo/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
