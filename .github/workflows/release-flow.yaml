@@ -1,7 +1,10 @@
 name: Semantic Release with Notes
 
 on:
-  push:
+  workflow_run:
+    workflows: ["NonRIQ CI"]  # This is the name of your existing workflow
+    types:
+      - completed
     branches:
       - staging
       - production
