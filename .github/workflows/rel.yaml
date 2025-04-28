@@ -5,7 +5,8 @@ on:
     branches:
       - staging
       - production
-
+permissions:
+  contents: write
 jobs:
   determine-version:
     runs-on: ubuntu-latest
