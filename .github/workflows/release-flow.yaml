@@ -7,6 +7,7 @@ on:
       - production
 permissions:
   contents: write
+
 jobs:
   determine-version:
     runs-on: ubuntu-latest
@@ -68,7 +69,7 @@ jobs:
         id: branch
         run: echo "name=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
         
-      - name: Create tag and generate release notes
+      - name: Create tag
         id: create-tag
         run: |
           # Get the latest version
@@ -110,67 +111,78 @@ jobs:
             git tag -a "$TAG_VERSION" -m "Release candidate $RC_COUNT for $NEW_VERSION"
             echo "Created release candidate tag: $TAG_VERSION"
             echo "tag_name=$TAG_VERSION" >> $GITHUB_OUTPUT
-            
-            # Generate basic release notes for RC
-            echo "release_notes=Release candidate $RC_COUNT for $NEW_VERSION" >> $GITHUB_OUTPUT
           else
             # For production, create the final version
             git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
             echo "Created release tag: $NEW_VERSION"
             echo "tag_name=$NEW_VERSION" >> $GITHUB_OUTPUT
-            
-            # Generate detailed release notes for production
-            echo "Generating release notes for $NEW_VERSION..."
-            
-            # Find previous production release tag
-            PREV_PROD_TAG=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | grep -v "rc" | sort -V | tail -n 2 | head -n 1)
-            
-            if [ -z "$PREV_PROD_TAG" ]; then
-              # If this is the first production release
-              RELEASE_NOTES="# Release $NEW_VERSION\n\n## What's New\n\n"
-              
-              # Get all commits and format them by type
-              FEAT_COMMITS=$(git log --pretty=format:"- %s (%h)" | grep -i "^feat")
-              FIX_COMMITS=$(git log --pretty=format:"- %s (%h)" | grep -i "^fix")
-              OTHER_COMMITS=$(git log --pretty=format:"- %s (%h)" | grep -i -v "^feat\|^fix")
-            else
-              # Get changes between previous production release and now
-              RELEASE_NOTES="# Release $NEW_VERSION\n\n## What's New\n\n"
-              
-              # Get commits by type
-              FEAT_COMMITS=$(git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i "^feat")
-              FIX_COMMITS=$(git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i "^fix")
-              OTHER_COMMITS=$(git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i -v "^feat\|^fix")
-            fi
-            
-            # Build the release notes
-            if [ ! -z "$FEAT_COMMITS" ]; then
-              RELEASE_NOTES="$RELEASE_NOTES### New Features\n\n$FEAT_COMMITS\n\n"
-            fi
-            
-            if [ ! -z "$FIX_COMMITS" ]; then
-              RELEASE_NOTES="$RELEASE_NOTES### Bug Fixes\n\n$FIX_COMMITS\n\n"
-            fi
-            
-            if [ ! -z "$OTHER_COMMITS" ]; then
-              RELEASE_NOTES="$RELEASE_NOTES### Other Changes\n\n$OTHER_COMMITS\n\n"
-            fi
-            
-            # Write release notes to output
-            echo "release_notes<<EOF" >> $GITHUB_OUTPUT
-            echo -e "$RELEASE_NOTES" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
           fi
           
           git push --tags
+
+      - name: Generate Release Notes
+        id: release-notes
+        if: ${{ steps.branch.outputs.name == 'production' }}
+        run: |
+          # Find previous production release tag
+          PREV_PROD_TAG=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | grep -v "rc" | sort -V | tail -n 2 | head -n 1 || echo "")
           
-      - name: Create GitHub Release
+          if [ -z "$PREV_PROD_TAG" ]; then
+            # If this is the first production release
+            echo "### What's New" > notes.md
+            
+            # Get all commits and format them by type
+            git log --pretty=format:"- %s (%h)" | grep -i "^feat" > feat_commits.txt
+            git log --pretty=format:"- %s (%h)" | grep -i "^fix" > fix_commits.txt
+            git log --pretty=format:"- %s (%h)" | grep -i -v "^feat\|^fix" > other_commits.txt
+          else
+            # Get changes between previous production release and now
+            echo "### What's New" > notes.md
+            
+            # Get commits by type
+            git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i "^feat" > feat_commits.txt || true
+            git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i "^fix" > fix_commits.txt || true
+            git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i -v "^feat\|^fix" > other_commits.txt || true
+          fi
+          
+          # Build the release notes
+          if [ -s feat_commits.txt ]; then
+            echo -e "\n#### New Features\n" >> notes.md
+            cat feat_commits.txt >> notes.md
+          fi
+          
+          if [ -s fix_commits.txt ]; then
+            echo -e "\n#### Bug Fixes\n" >> notes.md
+            cat fix_commits.txt >> notes.md
+          fi
+          
+          if [ -s other_commits.txt ]; then
+            echo -e "\n#### Other Changes\n" >> notes.md
+            cat other_commits.txt >> notes.md
+          fi
+          
+          echo "release_notes=$(cat notes.md)" >> $GITHUB_ENV
+
+      - name: Create GitHub Release for Production
+        if: ${{ steps.branch.outputs.name == 'production' }}
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.create-tag.outputs.tag_name }}
           release_name: Release ${{ steps.create-tag.outputs.tag_name }}
-          body: ${{ steps.create-tag.outputs.release_notes }}
+          body_path: notes.md
           draft: false
-          prerelease: ${{ steps.branch.outputs.name == 'staging' }}
+          prerelease: false
+          
+      - name: Create GitHub Release for Staging
+        if: ${{ steps.branch.outputs.name == 'staging' }}
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.create-tag.outputs.tag_name }}
+          release_name: Release ${{ steps.create-tag.outputs.tag_name }}
+          body: "Release candidate for testing"
+          draft: false
+          prerelease: true
