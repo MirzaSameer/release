@@ -127,4 +127,4 @@ jobs:
           tag_name: ${{ steps.create-tag.outputs.tag_name }}
           release_name: Release ${{ steps.create-tag.outputs.tag_name }}
           draft: false
-          prerelease: ${{ steps.branch.outputs.name == 'staging' }}
+          prerelease: ${{ steps.branch.outputs.name == 'staging' }}  
