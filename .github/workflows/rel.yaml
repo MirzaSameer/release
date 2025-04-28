@@ -5,7 +5,7 @@ on:
     branches:
      # - staging
      # - production
-permissions:
+permissions: 
   contents: write
 jobs:
   determine-version:
