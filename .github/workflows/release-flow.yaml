@@ -5,6 +5,7 @@ on:
     branches:
       - staging
       - production
+
 permissions:
   contents: write
 
@@ -69,8 +70,8 @@ jobs:
         id: branch
         run: echo "name=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
         
-      - name: Create tag
-        id: create-tag
+      - name: Create tag and release for staging
+        if: ${{ steps.branch.outputs.name == 'staging' }}
         run: |
           # Get the latest version
           LATEST_TAG=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n 1 || echo "v0.0.0")
@@ -101,88 +102,87 @@ jobs:
           
           NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
           
-          # Create tag based on branch
-          if [ "${{ steps.branch.outputs.name }}" = "staging" ]; then
-            # For staging, create a release candidate
-            RC_COUNT=$(git tag -l "$NEW_VERSION-rc.*" | wc -l)
-            RC_COUNT=$((RC_COUNT + 1))
-            TAG_VERSION="$NEW_VERSION-rc.$RC_COUNT"
-            
-            git tag -a "$TAG_VERSION" -m "Release candidate $RC_COUNT for $NEW_VERSION"
-            echo "Created release candidate tag: $TAG_VERSION"
-            echo "tag_name=$TAG_VERSION" >> $GITHUB_OUTPUT
-          else
-            # For production, create the final version
-            git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
-            echo "Created release tag: $NEW_VERSION"
-            echo "tag_name=$NEW_VERSION" >> $GITHUB_OUTPUT
-          fi
+          # Create release candidate tag
+          RC_COUNT=$(git tag -l "$NEW_VERSION-rc.*" | wc -l)
+          RC_COUNT=$((RC_COUNT + 1))
+          TAG_VERSION="$NEW_VERSION-rc.$RC_COUNT"
           
+          git tag -a "$TAG_VERSION" -m "Release candidate $RC_COUNT for $NEW_VERSION"
+          echo "Created release candidate tag: $TAG_VERSION"
           git push --tags
-
-      - name: Generate Release Notes
-        id: release-notes
+          
+          # Create GitHub Release using REST API
+          curl \
+            -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/releases \
+            -d '{
+              "tag_name": "'"$TAG_VERSION"'",
+              "name": "Release '"$TAG_VERSION"'",
+              "body": "Release candidate for testing",
+              "draft": false,
+              "prerelease": true
+            }'
+            
+      - name: Create tag and release for production
         if: ${{ steps.branch.outputs.name == 'production' }}
         run: |
-          # Find previous production release tag
+          # Get the latest version
+          LATEST_TAG=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n 1 || echo "v0.0.0")
+          
+          # Remove 'v' prefix for calculation
+          VERSION_NUM=${LATEST_TAG#v}
+          
+          # Split version into components
+          MAJOR=$(echo $VERSION_NUM | cut -d. -f1)
+          MINOR=$(echo $VERSION_NUM | cut -d. -f2)
+          PATCH=$(echo $VERSION_NUM | cut -d. -f3)
+          
+          # Bump version based on commit analysis
+          case "${{ needs.determine-version.outputs.version_type }}" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+          
+          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+          
+          # Create final version tag
+          git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
+          echo "Created release tag: $NEW_VERSION"
+          git push --tags
+          
+          # Generate simple release notes
           PREV_PROD_TAG=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | grep -v "rc" | sort -V | tail -n 2 | head -n 1 || echo "")
           
           if [ -z "$PREV_PROD_TAG" ]; then
-            # If this is the first production release
-            echo "### What's New" > notes.md
-            
-            # Get all commits and format them by type
-            git log --pretty=format:"- %s (%h)" | grep -i "^feat" > feat_commits.txt
-            git log --pretty=format:"- %s (%h)" | grep -i "^fix" > fix_commits.txt
-            git log --pretty=format:"- %s (%h)" | grep -i -v "^feat\|^fix" > other_commits.txt
+            # If this is the first release
+            COMMITS=$(git log --pretty=format:"- %s (%h)" | head -20)
           else
-            # Get changes between previous production release and now
-            echo "### What's New" > notes.md
-            
-            # Get commits by type
-            git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i "^feat" > feat_commits.txt || true
-            git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i "^fix" > fix_commits.txt || true
-            git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i -v "^feat\|^fix" > other_commits.txt || true
+            # Get changes since last production release
+            COMMITS=$(git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)")
           fi
           
-          # Build the release notes
-          if [ -s feat_commits.txt ]; then
-            echo -e "\n#### New Features\n" >> notes.md
-            cat feat_commits.txt >> notes.md
-          fi
-          
-          if [ -s fix_commits.txt ]; then
-            echo -e "\n#### Bug Fixes\n" >> notes.md
-            cat fix_commits.txt >> notes.md
-          fi
-          
-          if [ -s other_commits.txt ]; then
-            echo -e "\n#### Other Changes\n" >> notes.md
-            cat other_commits.txt >> notes.md
-          fi
-          
-          echo "release_notes=$(cat notes.md)" >> $GITHUB_ENV
-
-      - name: Create GitHub Release for Production
-        if: ${{ steps.branch.outputs.name == 'production' }}
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.create-tag.outputs.tag_name }}
-          release_name: Release ${{ steps.create-tag.outputs.tag_name }}
-          body_path: notes.md
-          draft: false
-          prerelease: false
-          
-      - name: Create GitHub Release for Staging
-        if: ${{ steps.branch.outputs.name == 'staging' }}
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.create-tag.outputs.tag_name }}
-          release_name: Release ${{ steps.create-tag.outputs.tag_name }}
-          body: "Release candidate for testing"
-          draft: false
-          prerelease: true
+          # Use the GitHub API to create a release with notes
+          curl \
+            -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/releases \
+            -d '{
+              "tag_name": "'"$NEW_VERSION"'",
+              "name": "Release '"$NEW_VERSION"'",
+              "body": "### Changes in this release\n\n'"${COMMITS//$'\n'/\\n}"'",
+              "draft": false,
+              "prerelease": false
+            }'
