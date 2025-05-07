@@ -3,7 +3,7 @@ name: Semantic Release with Notes
 on:
   push:
     branches:
-      - production
+      - p
 
 permissions:
   contents: write
