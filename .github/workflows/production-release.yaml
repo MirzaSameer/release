@@ -65,67 +65,7 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           
-      - name: Get current branch
-        id: branch
-        run: echo "name=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
-        
-      - name: Create tag and release for staging
-        if: ${{ steps.branch.outputs.name == 'staging' }}
-        run: |
-          # Get the latest version
-          LATEST_TAG=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n 1 || echo "v0.0.0")
-          
-          # Remove 'v' prefix for calculation
-          VERSION_NUM=${LATEST_TAG#v}
-          
-          # Split version into components
-          MAJOR=$(echo $VERSION_NUM | cut -d. -f1)
-          MINOR=$(echo $VERSION_NUM | cut -d. -f2)
-          PATCH=$(echo $VERSION_NUM | cut -d. -f3)
-          
-          # Bump version based on commit analysis
-          case "${{ needs.determine-version.outputs.version_type }}" in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
-          esac
-          
-          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
-          
-          # Create release candidate tag
-          RC_COUNT=$(git tag -l "$NEW_VERSION-rc.*" | wc -l)
-          RC_COUNT=$((RC_COUNT + 1))
-          TAG_VERSION="$NEW_VERSION-rc.$RC_COUNT"
-          
-          git tag -a "$TAG_VERSION" -m "Release candidate $RC_COUNT for $NEW_VERSION"
-          echo "Created release candidate tag: $TAG_VERSION"
-          git push --tags
-          
-          # Create GitHub Release using REST API
-          curl \
-            -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/releases \
-            -d '{
-              "tag_name": "'"$TAG_VERSION"'",
-              "name": "Release '"$TAG_VERSION"'",
-              "body": "Release candidate for testing",
-              "draft": false,
-              "prerelease": true
-            }'
-            
       - name: Create tag and release for production
-        if: ${{ steps.branch.outputs.name == 'production' }}
         run: |
           # Get the latest version
           LATEST_TAG=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n 1 || echo "v0.0.0")
@@ -161,18 +101,37 @@ jobs:
           echo "Created release tag: $NEW_VERSION"
           git push --tags
           
-          # Generate simple release notes
+          # Generate detailed release notes
           PREV_PROD_TAG=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | grep -v "rc" | sort -V | tail -n 2 | head -n 1 || echo "")
           
           if [ -z "$PREV_PROD_TAG" ]; then
             # If this is the first release
-            COMMITS=$(git log --pretty=format:"- %s (%h)" | head -20)
+            FEAT_COMMITS=$(git log --pretty=format:"- %s (%h)" | grep -i "^feat" || echo "")
+            FIX_COMMITS=$(git log --pretty=format:"- %s (%h)" | grep -i "^fix" || echo "")
+            OTHER_COMMITS=$(git log --pretty=format:"- %s (%h)" | grep -i -v "^feat\|^fix" || echo "")
           else
             # Get changes since last production release
-            COMMITS=$(git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)")
+            FEAT_COMMITS=$(git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i "^feat" || echo "")
+            FIX_COMMITS=$(git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i "^fix" || echo "")
+            OTHER_COMMITS=$(git log $PREV_PROD_TAG..HEAD --pretty=format:"- %s (%h)" | grep -i -v "^feat\|^fix" || echo "")
           fi
           
-          # Use the GitHub API to create a release with notes
+          # Build the release notes
+          RELEASE_NOTES="### Release $NEW_VERSION\n\n"
+          
+          if [ ! -z "$FEAT_COMMITS" ]; then
+            RELEASE_NOTES="$RELEASE_NOTES#### New Features\n\n$FEAT_COMMITS\n\n"
+          fi
+          
+          if [ ! -z "$FIX_COMMITS" ]; then
+            RELEASE_NOTES="$RELEASE_NOTES#### Bug Fixes\n\n$FIX_COMMITS\n\n"
+          fi
+          
+          if [ ! -z "$OTHER_COMMITS" ]; then
+            RELEASE_NOTES="$RELEASE_NOTES#### Other Changes\n\n$OTHER_COMMITS\n\n"
+          fi
+          
+          # Use the GitHub API to create a release with enhanced notes
           curl \
             -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
@@ -181,7 +140,7 @@ jobs:
             -d '{
               "tag_name": "'"$NEW_VERSION"'",
               "name": "Release '"$NEW_VERSION"'",
-              "body": "### Changes in this release\n\n'"${COMMITS//$'\n'/\\n}"'",
+              "body": "'"${RELEASE_NOTES//$'\n'/\\n}"'",
               "draft": false,
               "prerelease": false
             }'
